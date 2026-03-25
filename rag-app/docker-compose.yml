@@ -1,75 +1,78 @@
 volumes:
   postgres_data:
+
 services:
-  nginx:
-    build: ./nginx
-    ports:
-      - "8080:80"
-      - "8443:443"
-    depends_on:
-      - frontend
-      - backend
-      - core
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - ragnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnet
+
+
+  bootstrapper:
+    build: ./backend
+
+    command: >
+      sh -c "
+        echo REBUILD_EMBEDDINGS=$$REBUILD_EMBEDDINGS &&
+        python -m app.bootstrapper
+      "
+
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REBUILD_EMBEDDINGS: ${REBUILD_EMBEDDINGS}
+      PDF_PATH: /app/sources
+
+    volumes:
+      - ./sources:/app/sources
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - ragnet
+
 
   frontend:
     build: ./frontend
     networks:
       - ragnet
 
-  backend:
-    build: ./backend
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ragdb
-      CORE_URL: http://core:8000
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "8080:80"
     depends_on:
-      - postgresql
-      - core
+      - backend
+      - frontend
     networks:
       - ragnet
 
-  bootstrapper:
-    build: ./backend
-    command: >
-      sh -c "
-        if [ \"$$REBUILD_EMBEDDINGS\" = \"true\" ]; then
-          echo '🔄 REBUILD_EMBEDDINGS=true - пересобираем эмбеддинги...' &&
-          python -m app.bootstrapper;
-        else
-          echo '✅ REBUILD_EMBEDDINGS=false - проверяем наличие эмбеддингов...' &&
-          python -m app.bootstrapper;
-        fi
-      "
-    environment:
-      - REBUILD_EMBEDDINGS=${REBUILD_EMBEDDINGS}
-      - DATABASE_URL=${DATABASE_URL}
-      - PDF_PATH=${PDF_PATH}
-    volumes:
-      - ./sources:/app/sources
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - app-net
-
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data 
-      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - app-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
 networks:
   ragnet:
