@@ -1,0 +1,87 @@
+volumes:
+  postgres_data:
+  backend_cache:  
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - ragnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TRANSFORMERS_CACHE: /models/cache
+    volumes:
+      - backend_cache:/models/cache
+      - ./backend/app:/app/app  # Добавьте для hot-reload бэкенда
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnet
+    # Добавьте для auto-reload бэкенда
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  bootstrapper:
+    build: ./backend
+    command: >
+      sh -c "
+        echo REBUILD_EMBEDDINGS=$$REBUILD_EMBEDDINGS &&
+        python -m app.bootstrapper
+      "
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REBUILD_EMBEDDINGS: ${REBUILD_EMBEDDINGS}
+      PDF_PATH: /app/sources
+    volumes:
+      - ./sources:/app/sources
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnet
+
+  frontend:
+    build: ./frontend
+    volumes:
+      # Монтируем всю папку frontend для live обновлений
+      - ./frontend:/usr/share/nginx/html
+      # Если есть кастомный nginx.conf для фронта
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "3000:80"  # Прямой доступ к фронтенду (опционально)
+    networks:
+      - ragnet
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      # Для разработки - можно добавить hot-reload и для nginx
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
