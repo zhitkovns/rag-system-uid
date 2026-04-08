@@ -1,6 +1,18 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+
+<!--  рамка для кнопки отправить-->
+  <style>
+  #submitBtn {
+    border: 3px solid #8D407B;
+    border-radius: 12px;
+    padding: 10px 20px;      /* добавит воздух внутри */
+    background-color: #4a3340; /* для контраста */
+    cursor: pointer;
+  }
+  </style>
+
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>RAG-ассистент</title>
@@ -51,7 +63,7 @@
     textarea {
       width: 100%;
       padding: 14px 16px;
-      border: 1px solid #5a404d;
+      border: 1px solid #8D4071;
       border-radius: 12px;
       background: #21161c;
       color: #e7e2e5;
@@ -67,7 +79,7 @@
 
     textarea:focus {
       outline: none;
-      border-color: #9a6f84;
+      border-color: #8D4071;
       box-shadow: 0 0 0 3px rgba(154, 111, 132, 0.18);
       background: #25181f;
     }
@@ -116,7 +128,7 @@
       margin-top: 24px;
       padding: 16px;
       background: #19070f;
-      border: 1px solid #4a2231;
+      border: 1px solid #8D4071;
       border-radius: 14px;
       display: none;
     }
@@ -164,18 +176,18 @@
 </head>
 <body>
   <div class="container">
-    <h1>Напишите ваш вопрос!</h1>
+    <h1>RAG v1</h1>
 
     <form id="questionForm">
       <div class="form-group">
-        <label for="question">Спросите вопрос:</label>
+        <label for="question"></label>
         <textarea
           id="question"
           name="question"
           required
           minlength="1"
           maxlength="1000"
-          placeholder="Напишите ваш вопрос здесь..."></textarea>
+          placeholder="Ваш вопрос..."></textarea>
         <div class="hint"><span id="charCount">0</span>/1000</div>
       </div>
 
