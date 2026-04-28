@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS documents_short (
     embedding vector(768)
 );
 
-CREATE INDEX IF NOT EXISTS documents_short_embedding_idx
-ON documents_short
-USING ivfflat (embedding vector_cosine_ops);
+-- CREATE INDEX IF NOT EXISTS documents_short_embedding_idx
+-- ON documents_short                            Временно отключаем индекс для коротких документов, так как их может быть много и они могут часто обновляться
+-- USING ivfflat (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS documents_long (
     id SERIAL PRIMARY KEY,
@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS documents_long (
     embedding vector(768)
 );
 
-CREATE INDEX IF NOT EXISTS documents_long_embedding_idx
-ON documents_long
-USING ivfflat (embedding vector_cosine_ops);
+-- CREATE INDEX IF NOT EXISTS documents_long_embedding_idx
+-- ON documents_long         Временно отключаем индекс для длинных документов, так как их может быть много и они могут часто обновляться
+-- USING ivfflat (embedding vector_cosine_ops);
 
 
 

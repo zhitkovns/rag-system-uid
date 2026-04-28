@@ -2,6 +2,7 @@ import os
 import json
 import random
 import psycopg2
+import re
 from fastapi import FastAPI, HTTPException
 from sentence_transformers import SentenceTransformer
 from pydantic import BaseModel
@@ -10,8 +11,98 @@ from typing import List
 from app.schemas.users import UserIn, UserOut
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-TOP_K_SHORT = 5
-TOP_K_LONG = 5
+TOP_K_SHORT = 3
+TOP_K_LONG = 3
+FETCH_K = 25
+
+TOKEN_RE = re.compile(r"[а-яёa-z0-9]{3,}", re.IGNORECASE)
+
+STOP_WORDS = {
+    "как", "что", "это", "или", "для", "при", "над", "под", "где",
+    "если", "чем", "они", "она", "оно", "его", "еще", "уже",
+    "такое", "такой", "такая", "такие", "является", "являются",
+}
+
+QUERY_EXPANSIONS = {
+    # Частый пользовательский typo из твоего примера:
+    "предаются": "представляются задаются способы представления графов матрица смежности матрица инцидентности списки смежности",
+
+    # Пользователь пишет «связанные графы», а в теории обычно «связные графы»
+    "связанные графы": "связные графы связный граф связность путь между вершинами",
+    "связанный граф": "связный граф связность путь между вершинами",
+    "связанные": "связные связность",
+}
+
+
+def expand_query(text: str) -> str:
+    q = text.strip()
+    low = q.lower().replace("ё", "е")
+
+    additions = []
+
+    for trigger, expansion in QUERY_EXPANSIONS.items():
+        if trigger in low:
+            additions.append(expansion)
+
+    if additions:
+        return q + " " + " ".join(additions)
+
+    return q
+
+
+def lexical_tokens(text: str) -> set[str]:
+    words = TOKEN_RE.findall(text.lower().replace("ё", "е"))
+    return {
+        w[:6]
+        for w in words
+        if w not in STOP_WORDS
+    }
+
+
+def lexical_bonus(query: str, text: str) -> float:
+    q_tokens = lexical_tokens(query)
+    if not q_tokens:
+        return 0.0
+
+    t_tokens = lexical_tokens(text)
+    if not t_tokens:
+        return 0.0
+
+    return len(q_tokens & t_tokens) / len(q_tokens)
+
+
+def dedupe_rows(rows, limit: int):
+    result = []
+    seen = set()
+
+    for _, content, distance in rows:
+        key = re.sub(r"\W+", " ", content.lower().replace("ё", "е"))[:220]
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(content)
+
+        if len(result) >= limit:
+            break
+
+    return result
+
+
+def rerank(query: str, rows, limit: int):
+    scored = []
+
+    for content, distance in rows:
+        # distance меньше = лучше.
+        # lexical_bonus больше = лучше, поэтому вычитаем небольшой бонус.
+        bonus = lexical_bonus(query, content)
+        score = float(distance) - 0.08 * bonus
+
+        scored.append((score, content, float(distance)))
+
+    scored.sort(key=lambda x: x[0])
+    return dedupe_rows(scored, limit)
 
 app = FastAPI()
 
@@ -31,51 +122,103 @@ def embed_query(text: str):
     )[0]
     return emb.tolist()
 
-def search_short(query, top_k):
-    emb = embed_query(query)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT content,
-               embedding <=> %s::vector AS distance
-        FROM documents_short
-        ORDER BY embedding <=> %s::vector
-        LIMIT %s
-        """,
-        (emb, emb, top_k),
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+def search_table(table: str, query: str, fetch_k: int):
+    if table not in {"documents_short", "documents_long"}:
+        raise ValueError("Invalid table")
 
-def search_long(query, top_k):
-    emb = embed_query(query)
+    expanded_query = expand_query(query)
+    emb = embed_query(expanded_query)
+
     conn = get_conn()
     cur = conn.cursor()
+
+    # Если IVFFlat пока остался, увеличиваем probes.
+    # Если индекса нет — не мешает.
+    cur.execute("SET LOCAL ivfflat.probes = 50")
+
     cur.execute(
-        """
+        f"""
         SELECT content,
                embedding <=> %s::vector AS distance
-        FROM documents_long
+        FROM {table}
         ORDER BY embedding <=> %s::vector
         LIMIT %s
         """,
-        (emb, emb, top_k),
+        (emb, emb, fetch_k),
     )
+
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
-    return rows
+
+    return rows, expanded_query
+
 
 @app.post("/api/question", response_model=UserOut)
 def search(q: UserIn):
-    short_rows = search_short(q.question, TOP_K_SHORT)
-    long_rows = search_long(q.question, TOP_K_LONG)
-    short = [r[0] for r in short_rows]
-    long = [r[0] for r in long_rows]
+    short_rows, expanded_query = search_table(
+        "documents_short",
+        q.question,
+        FETCH_K,
+    )
+
+    long_rows, _ = search_table(
+        "documents_long",
+        q.question,
+        FETCH_K,
+    )
+
+    short = rerank(expanded_query, short_rows, TOP_K_SHORT)
+    long = rerank(expanded_query, long_rows, TOP_K_LONG)
+
     return UserOut(short=short, long=long)
+
+# def search_short(query, top_k):
+#     emb = embed_query(query)
+#     conn = get_conn()
+#     cur = conn.cursor()
+#     cur.execute(
+#         """
+#         SELECT content,
+#                embedding <=> %s::vector AS distance
+#         FROM documents_short
+#         ORDER BY embedding <=> %s::vector
+#         LIMIT %s
+#         """,
+#         (emb, emb, top_k),
+#     )
+#     rows = cur.fetchall()
+#     cur.close()
+#     conn.close()
+#     return rows
+
+# def search_long(query, top_k):
+#     emb = embed_query(query)
+#     conn = get_conn()
+#     cur = conn.cursor()
+#     cur.execute(
+#         """
+#         SELECT content,
+#                embedding <=> %s::vector AS distance
+#         FROM documents_long
+#         ORDER BY embedding <=> %s::vector
+#         LIMIT %s
+#         """,
+#         (emb, emb, top_k),
+#     )
+#     rows = cur.fetchall()
+#     cur.close()
+#     conn.close()
+#     return rows
+
+# @app.post("/api/question", response_model=UserOut)
+# def search(q: UserIn):
+#     short_rows = search_short(q.question, TOP_K_SHORT)
+#     long_rows = search_long(q.question, TOP_K_LONG)
+#     short = [r[0] for r in short_rows]
+#     long = [r[0] for r in long_rows]
+#     return UserOut(short=short, long=long)
 
 # ---------- Модели данных для тренажёра ----------
 class TrainerQuestionResponse(BaseModel):

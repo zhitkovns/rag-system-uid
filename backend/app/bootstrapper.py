@@ -4,6 +4,7 @@ import glob
 import logging
 import traceback
 import psycopg2
+from app.chunking import chunk_text
 from sentence_transformers import SentenceTransformer
 from app.question_generator import generate_and_store_questions, question_exists, clear_questions
 
@@ -52,19 +53,19 @@ def read_txt(path):
     log.info(f"Length = {len(text)}")
     return text
 
-def chunk_tokens(text, model, chunk_size, overlap):
-    tokenizer = model.tokenizer
-    tokens = tokenizer.encode(text)
-    chunks = []
-    start = 0
-    while start < len(tokens):
-        end = start + chunk_size
-        chunk = tokens[start:end]
-        chunk_text = tokenizer.decode(chunk)
-        chunks.append(chunk_text)
-        start += chunk_size - overlap
-    log.info(f"Chunks created: {len(chunks)} | size={chunk_size}")
-    return chunks
+# def chunk_tokens(text, model, chunk_size, overlap):
+#     tokenizer = model.tokenizer
+#     tokens = tokenizer.encode(text)
+#     chunks = []
+#     start = 0
+#     while start < len(tokens):
+#         end = start + chunk_size
+#         chunk = tokens[start:end]
+#         chunk_text = tokenizer.decode(chunk)
+#         chunks.append(chunk_text)
+#         start += chunk_size - overlap
+#     log.info(f"Chunks created: {len(chunks)} | size={chunk_size}")
+#     return chunks
 
 def embed(texts, model, prefix):
     log.info(f"Embedding {len(texts)}")
@@ -145,8 +146,19 @@ def main():
             long_all = []
             for file in txt_files:
                 text = read_txt(file)
-                short_chunks = chunk_tokens(text, model, chunk_size=15, overlap=3)
-                long_chunks = chunk_tokens(text, model, chunk_size=100, overlap=20)
+                short_chunks = chunk_text(
+                        text,
+                        model,
+                        max_tokens=90,
+                        overlap_sentences=1,
+                    )
+
+                long_chunks = chunk_text(
+                        text,
+                        model,
+                        max_tokens=240,
+                        overlap_sentences=2,
+                    )
                 short_all.extend(short_chunks)
                 long_all.extend(long_chunks)
             log.info(f"Total short = {len(short_all)}")
