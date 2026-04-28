@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from sentence_transformers import SentenceTransformer
 from pydantic import BaseModel
 from typing import List
+from sentence_transformers import CrossEncoder
 
 from app.schemas.users import UserIn, UserOut
 
@@ -14,6 +15,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TOP_K_SHORT = 3
 TOP_K_LONG = 3
 FETCH_K = 25
+MIN_VECTOR_SIMILARITY = 0.72
+MIN_LEXICAL_OVERLAP = 0.15
+
 
 TOKEN_RE = re.compile(r"[а-яёa-z0-9]{3,}", re.IGNORECASE)
 
@@ -32,7 +36,38 @@ QUERY_EXPANSIONS = {
     "связанный граф": "связный граф связность путь между вершинами",
     "связанные": "связные связность",
 }
+DEFINITION_MARKERS = (
+    "называется",
+    "называются",
+    "определяется",
+    "определяются",
+    "это",
+)
 
+reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+
+def is_definition_query(query: str) -> bool:
+    q = query.lower().replace("ё", "е").strip()
+    return (
+        len(q.split()) <= 5
+        or "что такое" in q
+        or q.endswith("это?")
+        or q.endswith("это")
+    )
+
+
+def definition_bonus(query: str, text: str) -> float:
+    if not is_definition_query(query):
+        return 0.0
+
+    low = text.lower().replace("ё", "е")
+    bonus = 0.0
+
+    for marker in DEFINITION_MARKERS:
+        if marker in low:
+            bonus += 0.08
+
+    return min(bonus, 0.20)
 
 def expand_query(text: str) -> str:
     q = text.strip()
@@ -93,13 +128,26 @@ def dedupe_rows(rows, limit: int):
 def rerank(query: str, rows, limit: int):
     scored = []
 
-    for content, distance in rows:
-        # distance меньше = лучше.
-        # lexical_bonus больше = лучше, поэтому вычитаем небольшой бонус.
-        bonus = lexical_bonus(query, content)
-        score = float(distance) - 0.08 * bonus
+    for row in rows:
+        content = row[0]
+        distance = float(row[1])
+        db_lexical = float(row[2] or 0.0) if len(row) > 2 else 0.0
 
-        scored.append((score, content, float(distance)))
+        vector_similarity = 1.0 - distance
+        lexical = lexical_bonus(query, content)
+
+        # Отсекаем совсем нерелевантные результаты.
+        
+        if vector_similarity < MIN_VECTOR_SIMILARITY and lexical < MIN_LEXICAL_OVERLAP:
+            continue
+
+        score = (
+            distance
+            - 0.12 * lexical
+            - 0.20 * db_lexical
+            - definition_bonus(query, content)
+        )
+        scored.append((score, content, distance))
 
     scored.sort(key=lambda x: x[0])
     return dedupe_rows(scored, limit)
@@ -110,6 +158,23 @@ model = SentenceTransformer(
     "intfloat/multilingual-e5-base",
     cache_folder="/models/cache"
 )
+
+
+def cross_rerank(query: str, chunks: list[str], limit: int):
+    if not chunks:
+        return []
+
+    pairs = [(query, chunk) for chunk in chunks]
+    scores = reranker.predict(pairs)
+
+    ranked = sorted(
+        zip(chunks, scores),
+        key=lambda x: float(x[1]),
+        reverse=True,
+    )
+
+    return [chunk for chunk, _ in ranked[:limit]]
+
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -139,12 +204,15 @@ def search_table(table: str, query: str, fetch_k: int):
     cur.execute(
         f"""
         SELECT content,
-               embedding <=> %s::vector AS distance
+               embedding <=> %s::vector AS distance,
+               ts_rank_cd(search_vector, plainto_tsquery('russian', %s)) AS lexical_rank
         FROM {table}
-        ORDER BY embedding <=> %s::vector
+        ORDER BY
+               (embedding <=> %s::vector)
+               - 0.20 * ts_rank_cd(search_vector, plainto_tsquery('russian', %s))
         LIMIT %s
         """,
-        (emb, emb, fetch_k),
+        (emb, query, emb, query, fetch_k),
     )
 
     rows = cur.fetchall()
@@ -157,7 +225,7 @@ def search_table(table: str, query: str, fetch_k: int):
 
 @app.post("/api/question", response_model=UserOut)
 def search(q: UserIn):
-    short_rows, expanded_query = search_table(
+    short_rows, _ = search_table(
         "documents_short",
         q.question,
         FETCH_K,
@@ -169,8 +237,13 @@ def search(q: UserIn):
         FETCH_K,
     )
 
-    short = rerank(expanded_query, short_rows, TOP_K_SHORT)
-    long = rerank(expanded_query, long_rows, TOP_K_LONG)
+    # Сначала дешёвый фильтр: threshold + lexical + definition boost.
+    short_candidates = rerank(q.question, short_rows, FETCH_K)
+    long_candidates = rerank(q.question, long_rows, FETCH_K)
+
+    # Потом дорогой, но более точный CrossEncoder-rerank.
+    short = cross_rerank(q.question, short_candidates, TOP_K_SHORT)
+    long = cross_rerank(q.question, long_candidates, TOP_K_LONG)
 
     return UserOut(short=short, long=long)
 
