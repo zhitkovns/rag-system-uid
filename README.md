@@ -171,10 +171,15 @@ sed -i 's/\r$//' entrypoint.sh
 │   └── app/
 │       ├── __init__.py
 │       ├── bootstrapper.py
+│       ├── chunking.py
 │       ├── main.py
-│       └── schemas/
-│           ├── __init__.py
-│           └── users.py
+│       ├── question_generator.py
+│       ├── schemas/
+│       │   ├── __init__.py
+│       │   └── users.py
+│       └── sources/
+│           ├── DM2024_module9.txt
+│           └── architecture.png
 ├── frontend/
 │   ├── Dockerfile
 │   ├── index.html
@@ -185,6 +190,4 @@ sed -i 's/\r$//' entrypoint.sh
 │   └── nginx.conf
 ├── postgresql/
 │   └── init.sql
-└── sources/
-    └── DM2024_module9.txt
 ```

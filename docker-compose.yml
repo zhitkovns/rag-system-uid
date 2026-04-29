@@ -26,7 +26,7 @@ services:
     volumes:
       - backend_cache:/models/cache
       - ./backend/app:/app/app
-      - ./sources:/app/sources
+      - ./backend/app/sources:/app/sources
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,8 +52,7 @@ services:
       REBUILD_EMBEDDINGS: ${REBUILD_EMBEDDINGS}
       PDF_PATH: /app/sources
     volumes:
-      - ./sources:/app/sources_source:ro
-      - sources_data:/app/sources
+      - ./backend/app/sources:/app/sources
     depends_on:
       postgres:
         condition: service_healthy

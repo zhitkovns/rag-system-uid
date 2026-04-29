@@ -22,7 +22,4 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 COPY app ./app
 
-# Копируем папку со встроенными файлами-источниками
-COPY sources /app/builtin_sources
-
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
