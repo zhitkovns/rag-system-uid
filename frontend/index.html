@@ -237,6 +237,40 @@
       margin: 0;
     }
 
+    /* Сообщение "ничего не найдено" */
+    .not-found-msg {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 18px 12px;
+      background: #1e0f18;
+      border: 1px dashed #6b3055;
+      border-radius: 14px;
+      color: #a87090;
+      font-size: 0.95rem;
+      text-align: center;
+    }
+    .not-found-msg .nf-icon { font-size: 1.8rem; }
+    .not-found-msg .nf-hint { font-size: 0.82rem; color: #7a5568; margin-top: 4px; }
+    .nf-topics {
+      list-style: none;
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-align: left;
+      width: 100%;
+      padding: 0 8px;
+    }
+    .nf-topics li {
+      font-size: 0.85rem;
+     [118;1:3u color: #9d6882;
+      padding: 5px 10px;
+      background: #2a1020;
+      border-radius: 8px;
+    }
+
     /* Розовая окантовка для всех кнопок, кроме clear-btn (уже есть) */
     #submitBtn, #checkBtn, #navPrevBtn, #navNextBtn, .clear-btn {
       border: 2px solid #ff69b4;
@@ -336,12 +370,28 @@
       container.innerHTML = '';
       return;
     }
-    const html = chatHistory.map(item => `
-      <div class="chat-message">
-        <div class="chat-question">❓ ${escapeHtml(item.question)}</div>
-        <div class="chat-answer">📖 ${escapeHtml(item.answer)}</div>
-      </div>
-    `).join('');
+    const html = chatHistory.map(item => {
+      const answerHtml = item.answer === '__NOT_FOUND__'
+        ? `<div class="not-found-msg">
+             <span class="nf-icon">🔍</span>
+             <span>По этому запросу ничего не найдено в учебнике</span>
+             <span class="nf-hint">Задайте вопрос по одной из доступных тем:</span>
+             <ul class="nf-topics">
+               <li> Свободные деревья</li>
+               <li> Ориентированные, упорядоченные и бинарные деревья</li>
+               <li> Представление деревьев в программах</li>
+               <li> Деревья сортировки</li>
+               <li> Специальные деревья</li>
+               <li> Кратчайший остов</li>
+             </ul>
+           </div>`
+        : `<div class="chat-answer">📖 ${escapeHtml(item.answer)}</div>`;
+      return `
+        <div class="chat-message">
+          <div class="chat-question">❓ ${escapeHtml(item.question)}</div>
+          ${answerHtml}
+        </div>`;
+    }).join('');
     container.innerHTML = html;
     container.scrollTop = container.scrollHeight;
   }
@@ -397,14 +447,19 @@
       if (!response.ok) throw new Error(`Ошибка ${response.status}`);
       const data = await response.json();
       let answerText = '';
-      if (data.short?.length) answerText += 'Кратко:\n' + data.short.join('\n');
-      if (data.long?.length) {
-        if (answerText) answerText += '\n\n';
-        answerText += 'Подробнее:\n' + data.long.join('\n');
+      const isNotFound = (!data.short || !data.short.length) && (!data.long || !data.long.length);
+
+      if (isNotFound) {
+        // Показываем красивое "ничего не найдено" прямо в истории
+        addToHistory(questionText, '__NOT_FOUND__');
+      } else {
+        if (data.short?.length) answerText += 'Кратко:\n' + data.short.join('\n');
+        if (data.long?.length) {
+          if (answerText) answerText += '\n\n';
+          answerText += 'Подробнее:\n' + data.long.join('\n');
+        }
+        addToHistory(questionText, answerText);
       }
-      if (!answerText) answerText = 'Нет ответа';
-      
-      addToHistory(questionText, answerText);
       questionInput.value = '';
       charCount.textContent = '0';
     } catch (err) {

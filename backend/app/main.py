@@ -17,6 +17,7 @@ TOP_K_LONG = 2
 FETCH_K = 40
 MIN_VECTOR_SIMILARITY = 0.72
 MIN_LEXICAL_OVERLAP = 0.15
+MIN_CROSS_SCORE = -1.5   # Порог cross-encoder: ниже — считаем нерелевантным
 
 
 TOKEN_RE = re.compile(r"[а-яёa-z0-9]{3,}", re.IGNORECASE)
@@ -26,6 +27,47 @@ STOP_WORDS = {
     "если", "чем", "они", "она", "оно", "его", "еще", "уже",
     "такое", "такой", "такая", "такие", "является", "являются",
 }
+
+RUSSIAN_VOWELS = set('аеёиоуыэюя')
+LATIN_VOWELS   = set('aeiou')
+
+def validate_query(text: str) -> tuple[bool, str]:
+    """
+    Проверяет, является ли запрос осмысленным.
+    Возвращает (валидный, причина_отказа).
+    """
+    text = text.strip()
+
+    # Слишком короткий
+    if len(text) < 3:
+        return False, "Запрос слишком короткий"
+
+    # Нет ни одной буквы (только цифры/знаки)
+    if not re.search(r'[а-яёА-ЯЁa-zA-Z]', text):
+        return False, "Запрос не содержит слов"
+
+    # Доля букв слишком мала — много спецсимволов/цифр
+    alpha = sum(c.isalpha() for c in text)
+    if alpha / len(text) < 0.40:
+        return False, "Слишком много нетекстовых символов"
+
+    # Повторяющийся один символ (аааааа, ffffff)
+    if re.search(r'(.)\1{4,}', text):
+        return False, "Случайный набор символов"
+
+    # Длинные «слова» без гласных → клавиатурный мусор
+    words = re.findall(r'[а-яёa-z]+', text.lower())
+    long_words = [w for w in words if len(w) > 4]
+    if long_words:
+        no_vowel = [
+            w for w in long_words
+            if not any(c in RUSSIAN_VOWELS | LATIN_VOWELS for c in w)
+        ]
+        if len(no_vowel) / len(long_words) > 0.6:
+            return False, "Случайный набор символов"
+
+    return True, ""
+
 
 QUERY_EXPANSIONS = {
     # Частый пользовательский typo из твоего примера:
@@ -190,7 +232,7 @@ model = SentenceTransformer(
 )
 
 
-def cross_rerank(query: str, chunks: list[str], limit: int):
+def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
     if not chunks:
         return []
 
@@ -203,7 +245,13 @@ def cross_rerank(query: str, chunks: list[str], limit: int):
         reverse=True,
     )
 
-    return [chunk for chunk, _ in ranked[:limit]]
+    # Отсекаем результаты ниже порога релевантности
+    filtered = [
+        chunk for chunk, score in ranked
+        if float(score) >= MIN_CROSS_SCORE
+    ]
+
+    return filtered[:limit]
 
 
 def get_conn():
@@ -255,6 +303,11 @@ def search_table(table: str, query: str, fetch_k: int):
 
 @app.post("/api/question", response_model=UserOut)
 def search(q: UserIn):
+    # Проверка: осмысленный ли запрос?
+    is_valid, _ = validate_query(q.question)
+    if not is_valid:
+        return UserOut(short=[], long=[])
+
     short_rows, _ = search_table(
         "documents_short",
         q.question,
