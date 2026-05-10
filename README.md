@@ -17,7 +17,7 @@
 Все сервисы работают в одной сети `ragnet`.
 
 ## Диаграмма архитектуры
-![Схема архитектуры RAG-системы](backend/sources/architecture.png)
+![Схема архитектуры RAG-системы](backend/app/sources/architecture.png)
 
 ## 3. Компоненты и их взаимодействие
 
