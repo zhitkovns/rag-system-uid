@@ -86,7 +86,13 @@ DEFINITION_MARKERS = (
     "это",
 )
 
-reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+# reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+reranker = None
+def get_reranker():
+    global reranker
+    if reranker is None:
+        reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+    return reranker
 
 def is_definition_query(query: str) -> bool:
     q = query.lower().replace("ё", "е").strip()
@@ -231,10 +237,12 @@ model = SentenceTransformer(
     cache_folder="/models/cache"
 )
 
-
 def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
     if not chunks:
         return []
+    model = get_reranker()
+    pairs = [(query, chunk) for chunk in chunks]
+    scores = model.predict(pairs)
 
     pairs = [(query, chunk) for chunk in chunks]
     scores = reranker.predict(pairs)
