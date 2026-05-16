@@ -510,7 +510,14 @@
       const response = await fetch('/api/trainer/question');
       if (!response.ok) throw new Error('Не удалось загрузить вопрос');
       const data = await response.json();
-      const newQuestion = { id: data.id, questionText: data.question };
+      // const newQuestion = { id: data.id, questionText: data.question };
+      const newQuestion = {
+        id: data.id,
+        questionText: data.question,
+        userAnswer: '',    // будет заполнено после ответа
+        status: null,      // 'Верно', 'Верно частично', 'Неверно'
+        explanation: ''
+      };
       historyQuestions.push(newQuestion);
       currentHistoryIndex = historyQuestions.length - 1;
       currentQuestionDiv.textContent = newQuestion.questionText;
@@ -529,17 +536,35 @@
   }
 
   function goToHistoryIndex(index) {
-    if (index < 0 || index >= historyQuestions.length) return;
-    currentHistoryIndex = index;
-    const q = historyQuestions[currentHistoryIndex];
-    currentQuestionDiv.textContent = q.questionText;
-    currentQuestionId = q.id;
-    trainerAnswer.value = '';
+  if (index < 0 || index >= historyQuestions.length) return;
+  currentHistoryIndex = index;
+  const q = historyQuestions[currentHistoryIndex];
+  currentQuestionDiv.textContent = q.questionText;
+  currentQuestionId = q.id;
+  trainerAnswer.value = q.userAnswer || '';   // восстанавливаем ответ
+  if (q.status) {
+    // показываем сохранённый результат
+    let statusHtml = '';
+    if (q.status === 'Верно') {
+      statusHtml = '<span style="color:#8bc34a;">✓ Верно!</span>';
+    } else if (q.status === 'Верно частично') {
+      statusHtml = '<span style="color:#ffb74d;">⚠ Верно частично</span>';
+    } else {
+      statusHtml = '<span style="color:#e57373;">✗ Неверно</span>';
+    }
+    let explanationHtml = '';
+    if (q.explanation && q.status !== 'Верно') {
+      explanationHtml = `<div class="explanation"><strong>Правильный ответ:</strong><br>${escapeHtml(q.explanation)}</div>`;
+    }
+    trainerResultDiv.innerHTML = `<div>${statusHtml}</div>${explanationHtml}`;
+    trainerResultDiv.style.display = 'block';
+  } else {
     trainerResultDiv.style.display = 'none';
     trainerResultDiv.innerHTML = '';
-    checkBtn.disabled = false;
-    updateUI();
   }
+  checkBtn.disabled = false;
+  updateUI();
+}
 
   async function onNextQuestion() {
     if (currentHistoryIndex + 1 < historyQuestions.length) {
@@ -570,6 +595,14 @@
       });
       if (!response.ok) throw new Error('Ошибка проверки');
       const data = await response.json();
+
+      const currentItem = historyQuestions[currentHistoryIndex];
+      if (currentItem) {
+        currentItem.userAnswer = answer;
+        currentItem.status = data.status;
+        currentItem.explanation = data.explanation || '';
+      }
+
       let statusHtml = '';
       if (data.status === 'Верно') {
         statusHtml = '<span style="color:#8bc34a;">✓ Верно!</span>';
