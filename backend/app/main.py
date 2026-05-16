@@ -238,27 +238,27 @@ model = SentenceTransformer(
 )
 
 
-def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
-    # Временно без переранжирования, чтобы избежать долгой загрузки CrossEncoder
-    return chunks[:limit]
-
 # def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
-#     if not chunks:
-#         return []
-#     model = get_reranker()
-#     pairs = [(query, chunk) for chunk in chunks]
-#     scores = model.predict(pairs)
-#
-#     ranked = sorted(
-#         zip(chunks, scores),
-#         key=lambda x: float(x[1]),
-#         reverse=True,
-#     )
-#     filtered = [
-#         chunk for chunk, score in ranked
-#         if float(score) >= MIN_CROSS_SCORE
-#     ]
-#     return filtered[:limit]
+#     # Временно без переранжирования, чтобы избежать долгой загрузки CrossEncoder
+#     return chunks[:limit]
+
+def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
+    if not chunks:
+        return []
+    model = get_reranker()
+    pairs = [(query, chunk) for chunk in chunks]
+    scores = model.predict(pairs)
+
+    ranked = sorted(
+        zip(chunks, scores),
+        key=lambda x: float(x[1]),
+        reverse=True,
+    )
+    filtered = [
+        chunk for chunk, score in ranked
+        if float(score) >= MIN_CROSS_SCORE
+    ]
+    return filtered[:limit]
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
