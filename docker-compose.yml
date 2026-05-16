@@ -51,8 +51,10 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REBUILD_EMBEDDINGS: ${REBUILD_EMBEDDINGS}
       PDF_PATH: /app/sources
+      TRANSFORMERS_CACHE: /models/cache 
     volumes:
       - ./backend/app/sources:/app/sources
+      - backend_cache:/models/cache 
     depends_on:
       postgres:
         condition: service_healthy

@@ -237,30 +237,28 @@ model = SentenceTransformer(
     cache_folder="/models/cache"
 )
 
+
 def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
-    if not chunks:
-        return []
-    model = get_reranker()
-    pairs = [(query, chunk) for chunk in chunks]
-    scores = model.predict(pairs)
+    # Временно без переранжирования, чтобы избежать долгой загрузки CrossEncoder
+    return chunks[:limit]
 
-    pairs = [(query, chunk) for chunk in chunks]
-    scores = reranker.predict(pairs)
-
-    ranked = sorted(
-        zip(chunks, scores),
-        key=lambda x: float(x[1]),
-        reverse=True,
-    )
-
-    # Отсекаем результаты ниже порога релевантности
-    filtered = [
-        chunk for chunk, score in ranked
-        if float(score) >= MIN_CROSS_SCORE
-    ]
-
-    return filtered[:limit]
-
+# def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
+#     if not chunks:
+#         return []
+#     model = get_reranker()
+#     pairs = [(query, chunk) for chunk in chunks]
+#     scores = model.predict(pairs)
+#
+#     ranked = sorted(
+#         zip(chunks, scores),
+#         key=lambda x: float(x[1]),
+#         reverse=True,
+#     )
+#     filtered = [
+#         chunk for chunk, score in ranked
+#         if float(score) >= MIN_CROSS_SCORE
+#     ]
+#     return filtered[:limit]
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -430,14 +428,15 @@ def get_random_question():
         cur.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Нет вопросов. Запустите bootstrapper с REBUILD_EMBEDDINGS=true")
-    random_id = random.randint(1, total)
-    cur.execute("SELECT id, question_text FROM questions WHERE id = %s", (random_id,))
+    # Безопасный случайный выбор – не зависит от непрерывности id
+    cur.execute("SELECT id, question_text FROM questions ORDER BY RANDOM() LIMIT 1")
     row = cur.fetchone()
     cur.close()
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Вопрос не найден")
     return TrainerQuestionResponse(id=row[0], question=row[1])
+
 
 @app.post("/api/trainer/check", response_model=TrainerCheckResponse)
 def check_answer(req: TrainerCheckRequest):
