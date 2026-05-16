@@ -232,11 +232,23 @@ def rerank(query: str, rows, limit: int, max_per_section: int = 1):
 
 app = FastAPI()
 
+
+# ВАЖНО !!!!!!!!!!!!!!
+
+# вот эта штука подгруждает на этапе поднятия контейнера тяжелую модель (несколько минут занимает,
+# если это убрать, то эти несколько минут будут в момент ответа на первых вопрос в ассистенте0)
+
+@app.on_event("startup")
+async def startup_event():
+    # Предзагружаем CrossEncoder при старте, чтобы первый запрос был быстрым
+    get_reranker()
+
+
+
 model = SentenceTransformer(
     "intfloat/multilingual-e5-base",
     cache_folder="/models/cache"
 )
-
 
 # def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
 #     # Временно без переранжирования, чтобы избежать долгой загрузки CrossEncoder
