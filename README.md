@@ -134,7 +134,7 @@
    ```bash
    docker-compose up --build
    ```
-5. Дождаться, пока bootstrapper завершит загрузку данных (в логах появится `BOOTSTRAPPER DONE`).
+5. Дождаться, пока система запустится (в логах появится `Application startup complete.` и `BOOTSTRAPPER DONE`).
 6. Открыть в браузере: `https://localhost:8443` (принять самоподписанный сертификат). HTTP-порт 8080 также доступен, но будет редиректить на HTTPS.
 
 #### Примечание
