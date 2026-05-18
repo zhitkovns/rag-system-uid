@@ -416,19 +416,12 @@ def _to_list(emb):
 def get_random_question():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM questions")
-    total = cur.fetchone()[0]
-    if total == 0:
-        cur.close()
-        conn.close()
-        raise HTTPException(status_code=404, detail="Нет вопросов. Запустите bootstrapper с REBUILD_EMBEDDINGS=true")
-    random_id = random.randint(1, total)
-    cur.execute("SELECT id, question_text FROM questions WHERE id = %s", (random_id,))
+    cur.execute("SELECT id, question_text FROM questions ORDER BY RANDOM() LIMIT 1")
     row = cur.fetchone()
     cur.close()
     conn.close()
     if not row:
-        raise HTTPException(status_code=404, detail="Вопрос не найден")
+        raise HTTPException(status_code=404, detail="Нет вопросов. Запустите bootstrapper.")
     return TrainerQuestionResponse(id=row[0], question=row[1])
 
 @app.post("/api/trainer/check", response_model=TrainerCheckResponse)

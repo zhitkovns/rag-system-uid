@@ -183,6 +183,32 @@
       display: block;
     }
 
+    /* Для Firefox */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: #8D4071 #2a1020;
+    }
+
+    /* Для Chrome, Edge, Safari */
+    *::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    *::-webkit-scrollbar-track {
+      background: #2a1020;
+      border-radius: 10px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background: #8D4071;
+      border-radius: 10px;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: #c05a9e;
+    }
+
     /* Стили для тренажёра */
     .trainer-header {
       display: flex;
@@ -265,13 +291,13 @@
     }
     .nf-topics li {
       font-size: 0.85rem;
-     [118;1:3u color: #9d6882;
+      color: #9d6882;
       padding: 5px 10px;
       background: #2a1020;
       border-radius: 8px;
     }
 
-    /* Розовая окантовка для всех кнопок, кроме clear-btn (уже есть) */
+    /* Розовая окантовка для всех кнопок */
     #submitBtn, #checkBtn, #navPrevBtn, #navNextBtn, .clear-btn {
       border: 2px solid #ff69b4;
       transition: border-color 0.2s;
@@ -309,6 +335,7 @@
   <div id="trainerPanel" class="panel">
     <div class="trainer-header">
       <div class="question-counter" id="questionCounter">Вопрос: 0 / 0</div>
+      <button id="trainerResetBtn" class="clear-btn" title="Сбросить прогресс (вернуться к первому вопросу)" style="background: #2c1a24; font-size: 1.2rem; padding: 4px 12px; border-radius: 20px;">🗑️</button>
     </div>
     <div id="trainerQuestionArea">
       <div class="question-text" id="currentQuestion">Загрузка вопроса...</div>
@@ -450,7 +477,6 @@
       const isNotFound = (!data.short || !data.short.length) && (!data.long || !data.long.length);
 
       if (isNotFound) {
-        // Показываем красивое "ничего не найдено" прямо в истории
         addToHistory(questionText, '__NOT_FOUND__');
       } else {
         if (data.short?.length) answerText += 'Кратко:\n' + data.short.join('\n');
@@ -475,10 +501,12 @@
   if (clearHistoryBtn) clearHistoryBtn.addEventListener('click', clearHistory);
   loadChatHistory();
 
-  // ---------- Логика тренажёра с историей вопросов ----------
-  let historyQuestions = [];
+  // ---------- Логика тренажёра с историей вопросов и продвинутым сбросом ----------
+  let historyQuestions = [];       // массив { id, questionText }
   let currentHistoryIndex = -1;
   let isWaitingForNewQuestion = false;
+  let firstQuestionId = null;     // запоминаем исходный первый вопрос
+  let firstQuestionText = null;
 
   const questionCounterSpan = document.getElementById('questionCounter');
   const currentQuestionDiv = document.getElementById('currentQuestion');
@@ -487,6 +515,7 @@
   const navPrevBtn = document.getElementById('navPrevBtn');
   const navNextBtn = document.getElementById('navNextBtn');
   const trainerResultDiv = document.getElementById('trainerResult');
+  const trainerResetBtn = document.getElementById('trainerResetBtn');
   let currentQuestionId = null;
 
   function updateUI() {
@@ -592,13 +621,57 @@
     }
   }
 
+  // Сброс прогресса тренажёра по кнопке 🗑️
+  function resetTrainerProgress() {
+    // Если история пуста или ещё не загружена – ничего не делаем
+    if (historyQuestions.length === 0) return;
+
+    // Если текущий вопрос – не первый (т.е. история содержит больше одного вопроса,
+    // либо мы не на первом индексе), то просто очищаем все вопросы, оставляя только первый.
+    if (historyQuestions.length > 1 || currentHistoryIndex !== 0) {
+      // Удаляем все элементы, кроме первого
+      const first = historyQuestions[0];
+      historyQuestions = [first];
+      currentHistoryIndex = 0;
+      currentQuestionId = first.id;
+      currentQuestionDiv.textContent = first.questionText;
+      trainerAnswer.value = '';
+      trainerResultDiv.style.display = 'none';
+      trainerResultDiv.innerHTML = '';
+      updateUI();
+      return;
+    }
+
+    // Если же история состоит ровно из одного вопроса и мы на нём,
+    // то заменяем первый вопрос на новый (загружаем случайный)
+    (async () => {
+      await addRandomQuestion();       // добавит новый вопрос в конец
+      // Теперь у нас есть два вопроса. Удаляем старый первый (индекс 0)
+      historyQuestions.splice(0, 1);   // удаляем старый первый
+      currentHistoryIndex = 0;         // теперь первый – это бывший второй
+      const newFirst = historyQuestions[0];
+      currentQuestionId = newFirst.id;
+      currentQuestionDiv.textContent = newFirst.questionText;
+      trainerAnswer.value = '';
+      trainerResultDiv.style.display = 'none';
+      trainerResultDiv.innerHTML = '';
+      updateUI();
+    })();
+  }
+
   async function initTrainer() {
-    await addRandomQuestion();
+    await addRandomQuestion();    // загружаем первый вопрос
+    // сохраняем его как "первый вопрос"
+    if (historyQuestions.length > 0) {
+      firstQuestionId = historyQuestions[0].id;
+      firstQuestionText = historyQuestions[0].questionText;
+    }
   }
 
   checkBtn.addEventListener('click', checkAnswer);
   navNextBtn.addEventListener('click', onNextQuestion);
   navPrevBtn.addEventListener('click', onPrevQuestion);
+  trainerResetBtn.addEventListener('click', resetTrainerProgress);
   initTrainer();
 </script>
 </body>
