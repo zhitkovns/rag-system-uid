@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import hashlib
 import logging
 import traceback
 import psycopg2
@@ -17,10 +18,80 @@ log = logging.getLogger("bootstrapper")
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_TXT_PATH = os.getenv("PDF_PATH", "/app/sources")
 REBUILD = os.getenv("REBUILD_EMBEDDINGS", "false").lower() == "true"
+CHUNKING_VERSION = "2026-05-20-section-aware-v2"
 
 def get_conn():
     log.info("Connecting to DB")
     return psycopg2.connect(DATABASE_URL)
+
+def ensure_metadata_table(conn):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS system_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    cur.close()
+
+def get_metadata(conn, key):
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM system_metadata WHERE key = %s", (key,))
+    row = cur.fetchone()
+    cur.close()
+    return row[0] if row else None
+
+def set_metadata(conn, key, value):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO system_metadata (key, value)
+        VALUES (%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (key, value),
+    )
+    conn.commit()
+    cur.close()
+
+def source_digest(txt_files):
+    digest = hashlib.sha256()
+
+    for path in sorted(txt_files):
+        digest.update(os.path.basename(path).encode("utf-8"))
+        digest.update(b"\0")
+
+        with open(path, "rb") as file:
+            for block in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(block)
+
+    return digest.hexdigest()
+
+def metadata_matches(expected_source_digest):
+    conn = get_conn()
+    try:
+        ensure_metadata_table(conn)
+        stored_chunking = get_metadata(conn, "documents_chunking_version")
+        stored_source = get_metadata(conn, "documents_source_digest")
+    finally:
+        conn.close()
+
+    return (
+        stored_chunking == CHUNKING_VERSION
+        and stored_source == expected_source_digest
+    )
+
+def save_document_metadata(current_source_digest):
+    conn = get_conn()
+    try:
+        ensure_metadata_table(conn)
+        set_metadata(conn, "documents_chunking_version", CHUNKING_VERSION)
+        set_metadata(conn, "documents_source_digest", current_source_digest)
+    finally:
+        conn.close()
 
 def clear_tables():
     log.info("Clearing tables")
@@ -121,16 +192,23 @@ def main():
                 log.error("Нет файлов .txt ни в одном источнике")
                 return
 
+        current_source_digest = source_digest(txt_files)
+
         log.info("Loading model")
         model = SentenceTransformer("intfloat/multilingual-e5-base")
         log.info("Model loaded")
 
         rebuild_docs = False
         if has_data():
-            if not REBUILD:
+            metadata_ok = metadata_matches(current_source_digest)
+
+            if not REBUILD and metadata_ok:
                 log.info("Данные документов существуют, пропускаем перестроение")
             else:
-                log.info("REBUILD=true -> очищаем таблицы документов")
+                if REBUILD:
+                    log.info("REBUILD=true -> очищаем таблицы документов")
+                else:
+                    log.info("Изменился источник или версия чанкинга -> очищаем таблицы документов")
                 clear_tables()
                 rebuild_docs = True
         else:
@@ -167,6 +245,7 @@ def main():
             long_emb = embed(long_all, model, prefix="passage")
             save_short(short_all, short_emb)
             save_long(long_all, long_emb)
+            save_document_metadata(current_source_digest)
 
         log.info("Проверяем наличие вопросов в БД")
         conn_check = get_conn()
@@ -176,9 +255,9 @@ def main():
             conn_check.close()
         log.info(f"Вопросы существуют: {questions_exist}, REBUILD={REBUILD}")
 
-        if REBUILD or not questions_exist:
+        if REBUILD or rebuild_docs or not questions_exist:
             log.info("Начинаем генерацию вопросов")
-            if REBUILD and questions_exist:
+            if (REBUILD or rebuild_docs) and questions_exist:
                 log.info("Очищаем старые вопросы")
                 conn_clear = get_conn()
                 try:

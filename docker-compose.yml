@@ -52,6 +52,7 @@ services:
       REBUILD_EMBEDDINGS: ${REBUILD_EMBEDDINGS}
       PDF_PATH: /app/sources
     volumes:
+      - ./backend/app:/app/app
       - ./backend/app/sources:/app/sources
     depends_on:
       postgres:

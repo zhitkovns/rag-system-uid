@@ -34,6 +34,11 @@ ON documents_short USING GIN (search_vector);
 CREATE INDEX IF NOT EXISTS documents_long_search_idx
 ON documents_long USING GIN (search_vector);
 
+CREATE TABLE IF NOT EXISTS system_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 
 -- Таблица для тренажера (вопросы-определения)
 CREATE TABLE IF NOT EXISTS questions (

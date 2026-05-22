@@ -21,6 +21,10 @@ MIN_CROSS_SCORE = -1.5   # Порог cross-encoder: ниже — считаем
 
 
 TOKEN_RE = re.compile(r"[а-яёa-z0-9]{3,}", re.IGNORECASE)
+SECTION_TITLE_RE = re.compile(r"^(\d+(?:\.\d+)+\.?\s+[^.]{3,120})\.")
+LEADING_SECTION_TITLE_RE = re.compile(
+    r"^\s*\d+(?:\.\d+)+\.?\s+[^.]{3,140}\.\s*"
+)
 
 STOP_WORDS = {
     "как", "что", "это", "или", "для", "при", "над", "под", "где",
@@ -148,6 +152,43 @@ def lexical_bonus(query: str, text: str) -> float:
     return len(q_tokens & t_tokens) / len(q_tokens)
 
 
+def normalize_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()
+
+
+def phrase_bonus(query: str, text: str) -> float:
+    query_norm = normalize_for_match(query).rstrip("?!.")
+
+    if len(query_norm) < 5:
+        return 0.0
+
+    return 0.25 if query_norm in normalize_for_match(text) else 0.0
+
+
+def section_title(text: str) -> str:
+    match = SECTION_TITLE_RE.match(text)
+    if not match:
+        return ""
+
+    return match.group(1)
+
+
+def title_bonus(query: str, text: str) -> float:
+    q_tokens = lexical_tokens(query)
+    if not q_tokens:
+        return 0.0
+
+    title_tokens = lexical_tokens(section_title(text))
+    if not title_tokens:
+        return 0.0
+
+    overlap = len(q_tokens & title_tokens) / len(q_tokens)
+    if q_tokens <= title_tokens:
+        return 0.18
+
+    return 0.12 * overlap
+
+
 def section_key(text: str) -> str:
     match = re.match(r"^(\d+(?:\.\d+)+\.?\s+.*?\(\d+/\d+\))", text)
     if match:
@@ -170,7 +211,12 @@ def jaccard_similarity(a: str, b: str) -> float:
     return len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
 
 
-def dedupe_rows(rows, limit: int, max_per_section: int = 1):
+def dedupe_rows(
+    rows,
+    limit: int,
+    max_per_section: int = 1,
+    similarity_threshold: float = 0.62,
+):
     result = []
     seen_exact = set()
     section_counts = {}
@@ -185,7 +231,7 @@ def dedupe_rows(rows, limit: int, max_per_section: int = 1):
         if section_counts.get(sec_key, 0) >= max_per_section:
             continue
 
-        if any(jaccard_similarity(content, existing) > 0.62 for existing in result):
+        if any(jaccard_similarity(content, existing) > similarity_threshold for existing in result):
             continue
 
         seen_exact.add(exact_key)
@@ -197,7 +243,13 @@ def dedupe_rows(rows, limit: int, max_per_section: int = 1):
 
     return result
 
-def rerank(query: str, rows, limit: int, max_per_section: int = 1):
+def rerank(
+    query: str,
+    rows,
+    limit: int,
+    max_per_section: int = 1,
+    similarity_threshold: float = 0.62,
+):
     scored = []
 
     for row in rows:
@@ -209,7 +261,7 @@ def rerank(query: str, rows, limit: int, max_per_section: int = 1):
         lexical = lexical_bonus(query, content)
 
         # Отсекаем совсем нерелевантные результаты.
-        
+
         if vector_similarity < MIN_VECTOR_SIMILARITY and lexical < MIN_LEXICAL_OVERLAP:
             continue
 
@@ -218,11 +270,18 @@ def rerank(query: str, rows, limit: int, max_per_section: int = 1):
             - 0.12 * lexical
             - 0.20 * db_lexical
             - definition_bonus(query, content)
+            - title_bonus(query, content)
+            - phrase_bonus(query, content)
         )
         scored.append((score, content, distance))
 
     scored.sort(key=lambda x: x[0])
-    return dedupe_rows(scored, limit, max_per_section=max_per_section)
+    return dedupe_rows(
+        scored,
+        limit,
+        max_per_section=max_per_section,
+        similarity_threshold=similarity_threshold,
+    )
 
 app = FastAPI()
 
@@ -252,6 +311,90 @@ def cross_rerank(query: str, chunks: list[str], limit: int) -> list[str]:
     ]
 
     return filtered[:limit]
+
+
+def unique_chunks(
+    chunks: list[str],
+    limit: int,
+    similarity_threshold: float = 0.55,
+) -> list[str]:
+    result = []
+
+    for chunk in chunks:
+        if any(jaccard_similarity(chunk, existing) > similarity_threshold for existing in result):
+            continue
+
+        result.append(chunk)
+        if len(result) >= limit:
+            break
+
+    return result
+
+
+def best_answer_start(query: str, text: str) -> int:
+    q_tokens = lexical_tokens(query)
+    if len(q_tokens) < 2:
+        return 0
+
+    query_words = TOKEN_RE.findall(query)
+    if len(query_words) >= 2:
+        pattern = r"(?<!\w)" + r"\s+".join(
+            re.escape(word) for word in query_words
+        ) + r"(?!\w)"
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.start()
+
+    starts = [0]
+    starts.extend(
+        match.start(1)
+        for match in re.finditer(r"(?:^|[.!?:;]\s+)([А-ЯЁA-Z][^.!?:;]{3,120})", text)
+    )
+
+    query_norm = normalize_for_match(query).rstrip("?!.")
+    best_start = 0
+    best_score = 0.0
+
+    for start in sorted(set(starts)):
+        preview = text[start:start + 240]
+        preview_tokens = lexical_tokens(preview)
+        if not preview_tokens:
+            continue
+
+        overlap = len(q_tokens & preview_tokens) / len(q_tokens)
+        phrase = 1.0 if query_norm and query_norm in normalize_for_match(preview) else 0.0
+        score = overlap + phrase
+
+        if score > best_score:
+            best_score = score
+            best_start = start
+
+    return best_start if best_score >= 1.0 else 0
+
+
+def strip_answer_headings(query: str, text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text[best_answer_start(query, text):].strip()
+    text = LEADING_SECTION_TITLE_RE.sub("", text).strip()
+
+    query_prefix = normalize_for_match(query).rstrip("?!.")
+    text_norm = normalize_for_match(text)
+    query_clean = query.strip().rstrip("?!.")
+
+    if query_prefix and text_norm.startswith(query_prefix):
+        text = text[len(query_clean):].lstrip(" .:-–—")
+
+    return text
+
+
+def prepare_answer_chunks(query: str, chunks: list[str], limit: int) -> list[str]:
+    cleaned = [
+        chunk
+        for chunk in (strip_answer_headings(query, item) for item in chunks)
+        if chunk
+    ]
+
+    return unique_chunks(cleaned, limit, similarity_threshold=0.50)
 
 
 def get_conn():
@@ -325,6 +468,7 @@ def search(q: UserIn):
         short_rows,
         FETCH_K,
         max_per_section=1,
+        similarity_threshold=0.62,
     )
 
     long_candidates = rerank(
@@ -332,10 +476,14 @@ def search(q: UserIn):
         long_rows,
         FETCH_K,
         max_per_section=2,
+        similarity_threshold=0.50,
     )
 
-    short = cross_rerank(q.question, short_candidates, TOP_K_SHORT)
-    long = cross_rerank(q.question, long_candidates, TOP_K_LONG)
+    short_ranked = cross_rerank(q.question, short_candidates, TOP_K_SHORT * 4)
+    long_ranked = cross_rerank(q.question, long_candidates, TOP_K_LONG * 4)
+
+    short = prepare_answer_chunks(q.question, short_ranked, TOP_K_SHORT)
+    long = prepare_answer_chunks(q.question, long_ranked, TOP_K_LONG)
 
     return UserOut(short=short, long=long)
 
