@@ -1,4 +1,5 @@
 fastapi
+httpx
 uvicorn
 psycopg2-binary
 pgvector
