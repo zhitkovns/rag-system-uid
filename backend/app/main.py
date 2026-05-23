@@ -10,6 +10,11 @@ from typing import List
 from sentence_transformers import CrossEncoder
 
 from app.schemas.users import UserIn, UserOut
+from app.llm import (
+    generate_dual_answer,
+    rephrase_trainer_feedback,
+    rephrase_trainer_question,
+)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 TOP_K_SHORT = 1
@@ -132,11 +137,21 @@ def expand_query(text: str) -> str:
 
 
 def lexical_tokens(text: str) -> set[str]:
-    words = TOKEN_RE.findall(text.lower().replace("ё", "е"))
+    stop_words = {
+        "это", "как", "что", "или", "для", "при", "над", "под", "так",
+        "вот", "где", "она", "они", "оно", "его", "ее", "ещё", "уже",
+        "чем", "тем", "без", "про", "когда", "если", "такой", "такая",
+        "такие", "является", "который", "которая", "которые", "может",
+        "быть", "есть", "все", "всех", "этот", "эта", "эти", "того",
+        "того", "того", "суть", "значит", "образом"
+    }
+
+    tokens = re.findall(r"[а-яёa-z0-9]+", text.lower())
+
     return {
-        w[:6]
-        for w in words
-        if w not in STOP_WORDS
+        token
+        for token in tokens
+        if len(token) >= 3 and token not in stop_words
     }
 
 
@@ -446,22 +461,19 @@ def search_table(table: str, query: str, fetch_k: int):
 
 @app.post("/api/question", response_model=UserOut)
 def search(q: UserIn):
-    # Проверка: осмысленный ли запрос?
     is_valid, _ = validate_query(q.question)
     if not is_valid:
-        return UserOut(short=[], long=[])
+        return UserOut(
+                answer=None,
+                answer_short=None,
+                answer_long=None,
+                short=[],
+                long=[],
+                llm_used=False,
+            )
 
-    short_rows, _ = search_table(
-        "documents_short",
-        q.question,
-        FETCH_K,
-    )
-
-    long_rows, _ = search_table(
-        "documents_long",
-        q.question,
-        FETCH_K,
-    )
+    short_rows, _ = search_table("documents_short", q.question, FETCH_K)
+    long_rows, _ = search_table("documents_long", q.question, FETCH_K)
 
     short_candidates = rerank(
         q.question,
@@ -485,8 +497,28 @@ def search(q: UserIn):
     short = prepare_answer_chunks(q.question, short_ranked, TOP_K_SHORT)
     long = prepare_answer_chunks(q.question, long_ranked, TOP_K_LONG)
 
-    return UserOut(short=short, long=long)
+    context_chunks = unique_chunks(
+        short + long,
+        limit=TOP_K_SHORT + TOP_K_LONG,
+        similarity_threshold=0.50,
+    )
 
+    answer_short, answer_long = generate_dual_answer(
+    question=q.question,
+    chunks=context_chunks,
+    use_llm=q.use_llm,
+    )
+
+    llm_used = bool(answer_short or answer_long)
+
+    return UserOut(
+    answer=answer_short,
+    answer_short=answer_short,
+    answer_long=answer_long,
+    short=short,
+    long=long,
+    llm_used=llm_used,
+    )
 # def search_short(query, top_k):
 #     emb = embed_query(query)
 #     conn = get_conn()
@@ -534,17 +566,23 @@ def search(q: UserIn):
 #     return UserOut(short=short, long=long)
 
 # ---------- Модели данных для тренажёра ----------
+
 class TrainerQuestionResponse(BaseModel):
     id: int
     question: str
+    llm_used: bool = False
+
 
 class TrainerCheckRequest(BaseModel):
     question_id: int
     answer: str
+    use_llm: bool = False
+
 
 class TrainerCheckResponse(BaseModel):
     status: str          # "Верно", "Неверно", "Верно частично"
     explanation: str
+    llm_used: bool = False
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -561,43 +599,112 @@ def _to_list(emb):
     return list(emb)
 
 @app.get("/api/trainer/question", response_model=TrainerQuestionResponse)
-def get_random_question():
+def get_random_question(use_llm: bool = False):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, question_text FROM questions ORDER BY RANDOM() LIMIT 1")
     row = cur.fetchone()
     cur.close()
     conn.close()
+
     if not row:
         raise HTTPException(status_code=404, detail="Нет вопросов. Запустите bootstrapper.")
-    return TrainerQuestionResponse(id=row[0], question=row[1])
+
+    question_text = row[1]
+
+    final_question, llm_used = rephrase_trainer_question(
+        question=question_text,
+        use_llm=use_llm,
+    )
+
+    return TrainerQuestionResponse(
+        id=row[0],
+        question=final_question,
+        llm_used=llm_used,
+    )
 
 @app.post("/api/trainer/check", response_model=TrainerCheckResponse)
 def check_answer(req: TrainerCheckRequest):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT answer_text, embedding FROM questions WHERE id = %s", (req.question_id,))
+    cur.execute(
+        "SELECT question_text, answer_text, embedding FROM questions WHERE id = %s",
+        (req.question_id,),
+    )
     row = cur.fetchone()
     cur.close()
     conn.close()
+
     if not row:
         raise HTTPException(status_code=404, detail="Вопрос не найден")
-    answer_text, embedding_ref = row
-    # Вычисляем эмбеддинг ответа пользователя
+
+    question_text, answer_text, embedding_ref = row
+
     user_emb = embed_query(req.answer)
-    # Приводим эталонный эмбеддинг к списку float
     ref_emb = _to_list(embedding_ref)
     similarity = cosine_similarity(user_emb, ref_emb)
 
-    # Настроенные пороги для реалистичной оценки
-    if similarity >= 0.9:
+    answer_tokens = lexical_tokens(req.answer)
+    reference_tokens = lexical_tokens(answer_text)
+
+    common_tokens = answer_tokens & reference_tokens
+
+    if reference_tokens:
+        overlap = len(common_tokens) / len(reference_tokens)
+    else:
+        overlap = 0.0
+
+    # Защита от бессмысленных ответов.
+    MIN_MEANINGFUL_TOKENS = 2
+    MIN_COMMON_TOKENS_FOR_PARTIAL = 1
+    MIN_COMMON_TOKENS_FOR_CORRECT = 2
+
+    is_too_short = len(answer_tokens) < MIN_MEANINGFUL_TOKENS
+    has_no_domain_overlap = len(common_tokens) == 0
+
+    # Итоговый score используем только если есть пересечение по терминам.
+    # Иначе случайная embedding-близость не должна давать "частично верно".
+    if common_tokens:
+        final_score = 0.7 * similarity + 0.3 * overlap
+    else:
+        final_score = 0.0
+
+    print(
+        "[TRAINER CHECK]",
+        f"similarity={similarity:.3f}",
+        f"overlap={overlap:.3f}",
+        f"common_tokens={sorted(common_tokens)}",
+        f"final_score={final_score:.3f}",
+    )
+
+    if is_too_short or has_no_domain_overlap:
+        status = "Неверно"
+        explanation = answer_text
+    elif (
+        similarity >= 0.84 and len(common_tokens) >= MIN_COMMON_TOKENS_FOR_CORRECT
+    ) or final_score >= 0.68:
         status = "Верно"
-        explanation = ""
-    elif similarity >= 0.8:
+        explanation = "Ответ верный."
+    elif (
+        similarity >= 0.70 and len(common_tokens) >= MIN_COMMON_TOKENS_FOR_PARTIAL
+    ) or final_score >= 0.50:
         status = "Верно частично"
         explanation = answer_text
     else:
         status = "Неверно"
         explanation = answer_text
 
-    return TrainerCheckResponse(status=status, explanation=explanation)
+    final_explanation, llm_used = rephrase_trainer_feedback(
+        question=question_text,
+        user_answer=req.answer,
+        correct_answer=answer_text,
+        status=status,
+        explanation=explanation,
+        use_llm=req.use_llm,
+    )
+
+    return TrainerCheckResponse(
+        status=status,
+        explanation=final_explanation,
+        llm_used=llm_used,
+    )

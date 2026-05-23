@@ -305,6 +305,115 @@
     #submitBtn:hover, #checkBtn:hover, #navPrevBtn:hover, #navNextBtn:hover, .clear-btn:hover {
       border-color: #ff1493;
     }
+  /* ---------- Настройки LLM ---------- */
+.settings-button {
+  position: fixed;
+  right: 22px;
+  top: 22px;
+  z-index: 1000;
+  width: 46px;
+  height: 46px;
+  border: 2px solid #ff69b4;
+  border-radius: 50%;
+  background: #3a1424;
+  color: #ffffff;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+.settings-button:hover {
+  background: #522033;
+  border-color: #ff1493;
+}
+
+.settings-panel {
+  position: fixed;
+  right: 22px;
+  top: 78px;
+  z-index: 1000;
+  width: 320px;
+  padding: 18px;
+  border-radius: 18px;
+  background: #31222b;
+  border: 1px solid #8D4071;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.42);
+  display: none;
+}
+
+.settings-panel.open {
+  display: block;
+}
+
+.settings-title {
+  font-weight: 800;
+  margin-bottom: 14px;
+  color: #e7e2e5;
+}
+
+.llm-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.llm-switch-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.llm-switch-row small {
+  color: #a89aa4;
+  font-size: 0.78rem;
+}
+
+.llm-switch-row input {
+  width: 48px;
+  height: 24px;
+  cursor: pointer;
+  accent-color: #8D4071;
+}
+
+.settings-note {
+  margin-top: 14px;
+  font-size: 0.78rem;
+  color: #a89aa4;
+  line-height: 1.4;
+}
+
+.llm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #2b1d4a;
+  color: #d9c8ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.llm-badge.off {
+  background: #2a2028;
+  color: #a89aa4;
+}
+
+.answer-title {
+  color: #ffffff;
+  font-weight: 800;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+
+.answer-divider {
+  height: 1px;
+  background: #4a3340;
+  margin: 10px 0;
+}
   </style>
 </head>
 <body>
@@ -312,8 +421,27 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="assistant">Ассистент</button>
     <button class="tab-btn" data-tab="trainer">Тренажёр</button>
+    <button class="settings-button" id="settingsButton" type="button" title="Настройки"></button>
   </div>
 
+  <div class="settings-panel" id="settingsPanel">
+  <div class="settings-title">Настройки</div>
+
+  <label class="llm-switch-row">
+    <span>
+      <strong>Локальная LLM</strong>
+      <small>Улучшает формулировки ответов и тренажёра</small>
+    </span>
+
+    <input id="llmToggle" type="checkbox">
+  </label>
+
+  <div class="settings-note">
+    Если LLM выключена или недоступна, система работает по старой схеме.
+  </div>
+</div>
+
+<div class="container">
   <!-- Панель ассистента -->
   <div id="assistantPanel" class="panel active-panel">
     <div id="chatHistory" class="chat-history"></div>
@@ -351,6 +479,63 @@
 </div>
 
 <script>
+    // ---------- Настройки LLM ----------
+  const LLM_STORAGE_KEY = 'ragUseLlm';
+
+  function getLlmEnabled() {
+    const saved = localStorage.getItem(LLM_STORAGE_KEY);
+
+    if (saved === null) {
+      return true;
+    }
+
+    return saved === 'true';
+  }
+
+  function setLlmEnabled(value) {
+    localStorage.setItem(LLM_STORAGE_KEY, String(Boolean(value)));
+  }
+
+  function getLlmBadgeHtml(llmUsed) {
+    if (llmUsed) {
+      return '<div class="llm-badge">✨ Сформулировано локальной LLM</div>';
+    }
+
+    return '<div class="llm-badge off">LLM выключена или недоступна — классический RAG</div>';
+  }
+
+  function initSettingsPanel() {
+    const settingsButton = document.getElementById('settingsButton');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const llmToggle = document.getElementById('llmToggle');
+
+    if (!settingsButton || !settingsPanel || !llmToggle) {
+      return;
+    }
+
+    llmToggle.checked = getLlmEnabled();
+
+    settingsButton.addEventListener('click', () => {
+      settingsPanel.classList.toggle('open');
+    });
+
+    llmToggle.addEventListener('change', () => {
+      setLlmEnabled(llmToggle.checked);
+    });
+
+    document.addEventListener('click', (event) => {
+      const clickedInside =
+        settingsPanel.contains(event.target) ||
+        settingsButton.contains(event.target);
+
+      if (!clickedInside) {
+        settingsPanel.classList.remove('open');
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', initSettingsPanel);
+
   // ---------- Переключение панелей ----------
   const tabBtns = document.querySelectorAll('.tab-btn');
   const panels = {
@@ -412,7 +597,8 @@
                <li> Кратчайший остов</li>
              </ul>
            </div>`
-        : `<div class="chat-answer">📖 ${escapeHtml(item.answer)}</div>`;
+        : `<div class="chat-answer">📖 ${escapeHtml(item.answer)}</div>
+          ${getLlmBadgeHtml(Boolean(item.llmUsed))}`;
       return `
         <div class="chat-message">
           <div class="chat-question">❓ ${escapeHtml(item.question)}</div>
@@ -423,8 +609,12 @@
     container.scrollTop = container.scrollHeight;
   }
 
-  function addToHistory(question, answer) {
-    chatHistory.push({ question: question, answer: answer });
+  function addToHistory(question, answer, llmUsed = false) {
+    chatHistory.push({
+      question: question,
+      answer: answer,
+      llmUsed: llmUsed
+    });
     saveChatHistory();
     renderChatHistory();
   }
@@ -435,13 +625,13 @@
     renderChatHistory();
   }
 
-  function escapeHtml(str) {
-    return str.replace(/[&<>]/g, function(m) {
-      if (m === '&') return '&amp;';
-      if (m === '<') return '&lt;';
-      if (m === '>') return '&gt;';
-      return m;
-    });
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
   }
 
   // ---------- Логика ассистента ----------
@@ -469,7 +659,10 @@
       const response = await fetch('/api/question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: questionText })
+        body: JSON.stringify({
+          question: questionText,
+          use_llm: getLlmEnabled()
+        })
       });
       if (!response.ok) throw new Error(`Ошибка ${response.status}`);
       const data = await response.json();
@@ -477,14 +670,29 @@
       const isNotFound = (!data.short || !data.short.length) && (!data.long || !data.long.length);
 
       if (isNotFound) {
-        addToHistory(questionText, '__NOT_FOUND__');
+        addToHistory(questionText, '__NOT_FOUND__', false);
       } else {
-        if (data.short?.length) answerText += 'Кратко:\n' + data.short.join('\n');
-        if (data.long?.length) {
-          if (answerText) answerText += '\n\n';
-          answerText += 'Подробнее:\n' + data.long.join('\n');
+        if (data.llm_used && (data.answer_short || data.answer_long)) {
+          if (data.answer_short) {
+            answerText += 'Краткий ответ:\n' + data.answer_short;
+          }
+
+          if (data.answer_long) {
+            if (answerText) answerText += '\n\n';
+            answerText += 'Подробный ответ:\n' + data.answer_long;
+          }
+        } else {
+          if (data.short?.length) {
+            answerText += 'Кратко:\n' + data.short.join('\n');
+          }
+
+          if (data.long?.length) {
+            if (answerText) answerText += '\n\n';
+            answerText += 'Подробнее:\n' + data.long.join('\n');
+          }
         }
-        addToHistory(questionText, answerText);
+
+        addToHistory(questionText, answerText, Boolean(data.llm_used));
       }
       questionInput.value = '';
       charCount.textContent = '0';
@@ -518,6 +726,13 @@
   const trainerResetBtn = document.getElementById('trainerResetBtn');
   let currentQuestionId = null;
 
+  function renderTrainerQuestion(questionText, llmUsed = false) {
+    currentQuestionDiv.innerHTML = `
+      <div>${escapeHtml(questionText)}</div>
+      ${llmUsed ? '<div class="llm-badge">✨ Вопрос переформулирован LLM</div>' : ''}
+    `;
+  }
+
   function updateUI() {
     if (historyQuestions.length === 0) {
       questionCounterSpan.textContent = 'Вопрос: 0 / 0';
@@ -536,13 +751,17 @@
     if (isWaitingForNewQuestion) return;
     isWaitingForNewQuestion = true;
     try {
-      const response = await fetch('/api/trainer/question');
+            const response = await fetch(`/api/trainer/question?use_llm=${getLlmEnabled()}`);
       if (!response.ok) throw new Error('Не удалось загрузить вопрос');
       const data = await response.json();
-      const newQuestion = { id: data.id, questionText: data.question };
+      const newQuestion = {
+        id: data.id,
+        questionText: data.question,
+        llmUsed: Boolean(data.llm_used)
+      };
       historyQuestions.push(newQuestion);
       currentHistoryIndex = historyQuestions.length - 1;
-      currentQuestionDiv.textContent = newQuestion.questionText;
+      renderTrainerQuestion(newQuestion.questionText, newQuestion.llmUsed);
       currentQuestionId = newQuestion.id;
       trainerAnswer.value = '';
       trainerResultDiv.style.display = 'none';
@@ -561,7 +780,7 @@
     if (index < 0 || index >= historyQuestions.length) return;
     currentHistoryIndex = index;
     const q = historyQuestions[currentHistoryIndex];
-    currentQuestionDiv.textContent = q.questionText;
+    renderTrainerQuestion(q.questionText, q.llmUsed);
     currentQuestionId = q.id;
     trainerAnswer.value = '';
     trainerResultDiv.style.display = 'none';
@@ -592,10 +811,14 @@
     }
     checkBtn.disabled = true;
     try {
-      const response = await fetch('/api/trainer/check', {
+       const response = await fetch('/api/trainer/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question_id: currentQuestionId, answer: answer })
+        body: JSON.stringify({
+          question_id: currentQuestionId,
+          answer: answer,
+          use_llm: getLlmEnabled()
+        })
       });
       if (!response.ok) throw new Error('Ошибка проверки');
       const data = await response.json();
@@ -611,7 +834,11 @@
       if (data.explanation && data.status !== 'Верно') {
         explanationHtml = `<div class="explanation"><strong>Эталонный ответ:</strong><br>${escapeHtml(data.explanation)}</div>`;
       }
-      trainerResultDiv.innerHTML = `<div>${statusHtml}</div>${explanationHtml}`;
+      const trainerLlmBadge = data.llm_used
+        ? '<div class="llm-badge">✨ Объяснение улучшено локальной LLM</div>'
+        : '';
+
+      trainerResultDiv.innerHTML = `<div>${statusHtml}</div>${explanationHtml}${trainerLlmBadge}`;
       trainerResultDiv.style.display = 'block';
     } catch (err) {
       trainerResultDiv.innerHTML = `<div class="error" style="display:block;">Ошибка: ${err.message}</div>`;
@@ -634,7 +861,7 @@
       historyQuestions = [first];
       currentHistoryIndex = 0;
       currentQuestionId = first.id;
-      currentQuestionDiv.textContent = first.questionText;
+      renderTrainerQuestion(first.questionText, first.llmUsed);
       trainerAnswer.value = '';
       trainerResultDiv.style.display = 'none';
       trainerResultDiv.innerHTML = '';
@@ -651,7 +878,7 @@
       currentHistoryIndex = 0;         // теперь первый – это бывший второй
       const newFirst = historyQuestions[0];
       currentQuestionId = newFirst.id;
-      currentQuestionDiv.textContent = newFirst.questionText;
+      renderTrainerQuestion(newFirst.questionText, newFirst.llmUsed);
       trainerAnswer.value = '';
       trainerResultDiv.style.display = 'none';
       trainerResultDiv.innerHTML = '';
