@@ -22,7 +22,7 @@
 ## 3. Компоненты и их взаимодействие
 
 ## Диаграмма архитектуры
-![Схема архитектуры RAG-системы](backend/app/sources/architecture.png)
+![Схема архитектуры RAG-системы](backend/app/sources/project_architecture.png)
 
 ### 3.1 PostgreSQL (pgvector)
 
