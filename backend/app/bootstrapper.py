@@ -18,7 +18,7 @@ log = logging.getLogger("bootstrapper")
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_TXT_PATH = os.getenv("PDF_PATH", "/app/sources")
 REBUILD = os.getenv("REBUILD_EMBEDDINGS", "false").lower() == "true"
-CHUNKING_VERSION = "2026-05-20-section-aware-v2"
+CHUNKING_VERSION = "2026-06-04-section-aware-v3"
 
 def get_conn():
     log.info("Connecting to DB")
@@ -225,18 +225,18 @@ def main():
             for file in txt_files:
                 text = read_txt(file)
                 short_chunks = chunk_text(
-                        text,
-                        model,
-                        max_tokens=90,
-                        overlap_sentences=1,
-                    )
+                    text,
+                    model,
+                    max_tokens=70,
+                    overlap_sentences=1,
+                )
 
                 long_chunks = chunk_text(
-                        text,
-                        model,
-                        max_tokens=240,
-                        overlap_sentences=2,
-                    )
+                    text,
+                    model,
+                    max_tokens=220,
+                    overlap_sentences=2,
+                )
                 short_all.extend(short_chunks)
                 long_all.extend(long_chunks)
             log.info(f"Total short = {len(short_all)}")
