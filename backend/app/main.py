@@ -23,6 +23,9 @@ FETCH_K = 40
 MIN_VECTOR_SIMILARITY = 0.72
 MIN_LEXICAL_OVERLAP = 0.15
 MIN_CROSS_SCORE = -1.5   # Порог cross-encoder: ниже — считаем нерелевантным
+MIN_CONTEXT_LEXICAL_OVERLAP = 0.18
+MIN_SHORT_QUERY_LEXICAL_OVERLAP = 0.90
+MIN_DB_LEXICAL_RANK = 0.0001
 
 
 TOKEN_RE = re.compile(r"[а-яёa-z0-9]{3,}", re.IGNORECASE)
@@ -35,6 +38,11 @@ STOP_WORDS = {
     "как", "что", "это", "или", "для", "при", "над", "под", "где",
     "если", "чем", "они", "она", "оно", "его", "еще", "уже",
     "такое", "такой", "такая", "такие", "является", "являются",
+}
+
+SMALLTALK_TOKENS = {
+    "привет", "здравствуй", "здравствуйте", "добрый", "день", "вечер",
+    "утро", "хай", "hello", "hi", "hey", "спасибо", "пока",
 }
 
 RUSSIAN_VOWELS = set('аеёиоуыэюя')
@@ -146,7 +154,7 @@ def lexical_tokens(text: str) -> set[str]:
         "того", "того", "суть", "значит", "образом"
     }
 
-    tokens = re.findall(r"[а-яёa-z0-9]+", text.lower())
+    tokens = re.findall(r"[а-яёa-z0-9]+", text.lower().replace("ё", "е"))
 
     return {
         token
@@ -165,6 +173,67 @@ def lexical_bonus(query: str, text: str) -> float:
         return 0.0
 
     return len(q_tokens & t_tokens) / len(q_tokens)
+
+
+def is_smalltalk_query(query: str) -> bool:
+    tokens = lexical_tokens(query)
+    if not tokens:
+        return False
+
+    return tokens <= SMALLTALK_TOKENS
+
+
+def has_db_lexical_signal(rows) -> bool:
+    return any(float(row[2] or 0.0) > MIN_DB_LEXICAL_RANK for row in rows)
+
+
+def has_relevant_context(query: str, chunks: list[str], rows=None) -> bool:
+    if is_smalltalk_query(query):
+        return False
+
+    q_tokens = lexical_tokens(query)
+    if not q_tokens or not chunks:
+        return False
+
+    rows = rows or []
+    overlaps = [
+        lexical_bonus(query, chunk)
+        for chunk in chunks
+        if chunk and chunk.strip()
+    ]
+    max_overlap = max(overlaps, default=0.0)
+
+    if len(q_tokens) == 1:
+        return (
+            max_overlap >= MIN_SHORT_QUERY_LEXICAL_OVERLAP
+            or has_db_lexical_signal(rows)
+        )
+
+    if max_overlap >= MIN_CONTEXT_LEXICAL_OVERLAP:
+        return True
+
+    # Для длинных вопросов допускаем более распределённое совпадение по нескольким
+    # фрагментам, но полностью посторонние запросы с нулевым пересечением отсекаем.
+    context_tokens = set()
+    for chunk in chunks:
+        context_tokens.update(lexical_tokens(chunk))
+
+    distributed_overlap = len(q_tokens & context_tokens) / len(q_tokens)
+    return (
+        distributed_overlap >= MIN_CONTEXT_LEXICAL_OVERLAP
+        or has_db_lexical_signal(rows)
+    )
+
+
+def empty_search_response() -> UserOut:
+    return UserOut(
+        answer=None,
+        answer_short=None,
+        answer_long=None,
+        short=[],
+        long=[],
+        llm_used=False,
+    )
 
 
 def normalize_for_match(text: str) -> str:
@@ -463,14 +532,10 @@ def search_table(table: str, query: str, fetch_k: int):
 def search(q: UserIn):
     is_valid, _ = validate_query(q.question)
     if not is_valid:
-        return UserOut(
-                answer=None,
-                answer_short=None,
-                answer_long=None,
-                short=[],
-                long=[],
-                llm_used=False,
-            )
+        return empty_search_response()
+
+    if is_smalltalk_query(q.question):
+        return empty_search_response()
 
     short_rows, _ = search_table("documents_short", q.question, FETCH_K)
     long_rows, _ = search_table("documents_long", q.question, FETCH_K)
@@ -503,21 +568,28 @@ def search(q: UserIn):
         similarity_threshold=0.50,
     )
 
+    if not has_relevant_context(
+        q.question,
+        context_chunks,
+        rows=short_rows + long_rows,
+    ):
+        return empty_search_response()
+
     answer_short, answer_long = generate_dual_answer(
-    question=q.question,
-    chunks=context_chunks,
-    use_llm=q.use_llm,
+        question=q.question,
+        chunks=context_chunks,
+        use_llm=q.use_llm,
     )
 
     llm_used = bool(answer_short or answer_long)
 
     return UserOut(
-    answer=answer_short,
-    answer_short=answer_short,
-    answer_long=answer_long,
-    short=short,
-    long=long,
-    llm_used=llm_used,
+        answer=answer_short,
+        answer_short=answer_short,
+        answer_long=answer_long,
+        short=short,
+        long=long,
+        llm_used=llm_used,
     )
 # def search_short(query, top_k):
 #     emb = embed_query(query)
